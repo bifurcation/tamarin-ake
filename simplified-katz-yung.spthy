@@ -1,0 +1,160 @@
+theory Simplified_Katz_Yung
+begin
+
+builtins: diffie-hellman, signing
+
+// PKI Provisioning
+rule RegisterPK:
+  [ Fr(~ltk) ]
+  -->
+  [
+    !Ltk($A, ~ltk),
+    !Pk($A, pk(~ltk)),
+    Out(pk(~ltk))
+  ]
+
+rule RevealLTK:
+  [ !Ltk(A, ltk) ]
+  --[ LtkReveal(A) ]->
+  [ Out(ltk) ]
+
+
+// C->S: C, g^x
+// S->C: S, g^y, Sig_S(C | g^x | S | g^y)
+// C->S: Sig_C(g^y | C | rC | S | rS)
+
+// Client logic
+rule ClientInit:
+  [
+    !Ltk(C, ltkC),
+    Fr(~x)
+  ]
+  --[ ClientSentRequest(C, $S, ~x) ]->
+  [
+    ClientWait(C, $S, ~x, ltkC),
+    Out(C, 'g'^~x)
+  ]
+
+rule ClientFinish:
+  let
+    gx = 'g'^x
+    msg = <C, gx, S, gy>
+    sigOut = sign(msg, ltkC)
+    k = gx^~y
+  in
+  [
+    In(<gy, S, sigIn>),
+    ClientWait(C, S, x, ltkC),
+    !Pk(S, pkS)
+  ]
+  --[ Eq(verify(sigIn, msg, pkS), true),
+      ClientDone(C, S, gx, gy, k) ]->
+  [
+    Out(<sigOut>)
+  ]
+
+// Server logic
+rule ServerInit:
+  let
+    gy = 'g'^~y
+    msg = <C, gx, S, gy>
+    sig = sign(msg, ltkS)
+  in
+  [
+    In(<C, gx>),
+    !Ltk(S, ltkS),
+    Fr(~y)
+  ]
+  --[ ServerResponded(S, C, gx, gy) ]->
+  [
+    ServerWait(S, C, gx, ~y),
+    Out(<gy, S, sig>)
+  ]
+
+rule ServerFinish:
+  let
+    gy = 'g'^y
+    msg = <C, gx, S, gy>
+    k = gy^x
+  in
+  [
+    In(<sig>),
+    !Pk(C, pkC),
+    ServerWait(S, C, gx, y)
+  ]
+  --[ Neq(gy, 'g'^x),
+      Eq(verify(sig, msg, pkC), true),
+      ServerDone(S, C, 'g'^x, gy, k) ]->
+  []
+
+// Restrictions
+restriction Equality:
+  "All x y #i. Eq(x,y) @i ==> x = y"
+
+restriction Inequality:
+  "All x y #i. Neq(x,y) @i ==> not(x = y)"
+
+// Functionality test
+lemma HonestTrace:
+  exists-trace
+  "
+    Ex C S gx gy k #i #j.
+        ClientDone(C, S, gx, gy, k) @ #i
+      & ServerDone(S, C, gx, gy, k) @ #j
+      & not(Ex A #k. LtkReveal(A) @ #k)
+  "
+
+// If a client has established a session key,
+// ... then the server has the same key,
+// ... and it is not known to the attacker
+// ... unless one of the long-term keys was compromised
+lemma KeySecrecy:
+  "
+  not(Ex C S gx gy k #i #j #k.
+        ClientDone(C, S, gx, gy, k) @ #i
+      & ServerDone(S, C, gx, gy, k) @ #j
+      & K(k) @ #k
+      & not(Ex #rc. LtkReveal(C) @ #rc)
+      & not(Ex #rs. LtkReveal(S) @ #rs)
+  )
+  "
+
+// If a client has established a session key
+// ... then it's based on a response from a server
+lemma ServerLiveness:
+  "
+  All C S gx gy k #i.
+    ClientDone(C, S, gx, gy, k) @ #i
+    ==> ( (Ex #j. (ServerResponded(S, C, gx, gy) @ #j) & (#j < #i))
+        | (Ex #rc. LtkReveal(C) @ #rc)
+        | (Ex #rs. LtkReveal(S) @ #rs)
+        )
+  "
+
+// If a server has established a session key
+// ... then it's based on a request from a client
+lemma ClientLiveness:
+  "
+  All C S gx gy k #i.
+    ServerDone(S, C, gx, gy, k) @ #i
+    ==> ( (Ex #j. (ClientDone(C, S, gx, gy, k) @ #j) & (#j < #i))
+        | (Ex #rc. LtkReveal(C) @ #rc)
+        | (Ex #rs. LtkReveal(S) @ #rs)
+        )
+  "
+
+// ... injective agreement
+lemma InjectiveAgreement:
+  "
+  All C S gx gy k #i.
+    ServerDone(S, C, gx, gy, k) @ #i
+    ==> ( not(Ex C2 S2 gx2 gy2 #i2.
+              ServerDone(S2, C2, gx2, gy2, k) @ #i2
+             & not(#i2 = #i)
+             )
+        | (Ex #rc. LtkReveal(C) @ #rc)
+        | (Ex #rs. LtkReveal(S) @ #rs)
+        )
+  "
+
+end
