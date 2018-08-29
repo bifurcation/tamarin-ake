@@ -8,6 +8,7 @@ syntax.
 * The BADH protocol from the [SIGMA paper](SIGMA), in order to
   verify that Tamarin finds some known attacks on AKEs.  Identity
   misbinding attacks are manifested as liveness attacks.
+* SIGMA itself (without identity protection)
 * The [Katz-Yung group AKE compiler](KY07), specialized to a vanilla
   two-party DH exchange.
 
