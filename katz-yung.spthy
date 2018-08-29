@@ -37,19 +37,19 @@ rule ClientInit:
 
 rule ClientFinish:
   let
-    msgIn = <'g'^x, C, rC, S, rS>
+    msgIn = <gx, C, rC, S, rS>
     msgOut = <'g'^~y, C, rC, S, rS>
     sigOut = sign(msgOut, ltkC)
-    k = 'g'^(x*~y)
+    k = gx^~y
   in
   [
-    In(<'g'^x, S, rS, sigIn>),
+    In(<gx, S, rS, sigIn>),
     ClientWait(C, S, rC, ltkC),
     !Pk(S, pkS),
     Fr(~y)
   ]
   --[ Eq(verify(sigIn, msgIn, pkS), true),
-      ClientDone(C, S, 'g'^x, 'g'^~y, k) ]->
+      ClientDone(C, S, gx, 'g'^~y, k) ]->
   [
     Out(<'g'^~y, sigOut>)
   ]
@@ -69,22 +69,22 @@ rule ServerInit:
   --[ ServerResponded(S, C, 'g'^~x) ]->
   [
     ServerWait(S, C, rC, ~rS, ~x),
-    Out(<'g'^~x, ~rS, sig>)
+    Out(<'g'^~x, S, ~rS, sig>)
   ]
 
 rule ServerFinish:
   let
-    msg = <'g'^y, C, rC, S, rS>
-    k = 'g'^(x*y)
+    msg = <gy, C, rC, S, rS>
+    k = gy^x
   in
   [
-    In(<'g'^y, sig>),
+    In(<gy, sig>),
     !Pk(C, pkC),
     ServerWait(S, C, rC, rS, x)
   ]
-  --[ Neq('g'^y, 'g'^x),
+  --[ Neq(gy, 'g'^x),
       Eq(verify(sig, msg, pkC), true),
-      ServerDone(S, C, 'g'^x, 'g'^y, k) ]->
+      ServerDone(S, C, 'g'^x, gy, k) ]->
   []
 
 // Restrictions
