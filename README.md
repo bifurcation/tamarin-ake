@@ -2,9 +2,15 @@ Authenticated Key Exchange in Tamarin
 =====================================
 
 This repo contains some models of authenticated key exchange
-protocols in the [Tamarin prover](https://tamarin-prover.github.io)
+protocols in the [Tamarin prover](Tamarin)
 syntax.
 
-* The [Katz-Yung group AKE compiler](http://www.cs.umd.edu/~jkatz/papers/multi-auth-full.pdf), 
-  specialized to the two party case.
+* The BADH protocol from the [SIGMA paper](SIGMA), in order to
+  verify that Tamarin finds some known attacks on AKEs.  Identity
+  misbinding attacks are manifested as liveness attacks.
+* The [Katz-Yung group AKE compiler](KY07), specialized to a vanilla
+  two-party DH exchange.
 
+[Tamarin]: https://tamarin-prover.github.io
+[KY07]: http://www.cs.umd.edu/~jkatz/papers/multi-auth-full.pdf
+[SIGMA]: http://webee.technion.ac.il/~hugo/sigma-pdf.pdf
