@@ -1,4 +1,4 @@
-theory Simplified_Katz_Yung
+theory Incremental_Katz_Yung
 begin
 
 builtins: diffie-hellman, signing
@@ -33,17 +33,17 @@ rule ClientInit:
     !Ltk(C, ltkC),
     Fr(~x)
   ]
-  --[ ClientSentInitKey(C, $S, gx) ]->
+  --[ ClientSentInitKey(C, gx) ]->
   [
     ClientWait(C, $S, ~x, ltkC),
-    Out(C, gx, sig)
+    Out(<C, gx, sig>)
   ]
 
 rule ClientFinish:
   let
     gx = 'g'^x
     msg = <C, gx, S, gy>
-    k = gx^~y
+    k = gy^x
   in
   [
     In(<gy, S, sig>),
@@ -61,14 +61,16 @@ rule ServerInit:
     msgIn = <C, gx>
     msgOut = <C, gx, S, gy>
     sigOut = sign(msgOut, ltkS)
+    k = gx^~y
   in
   [
     In(<C, gx, sigIn>),
     !Ltk(S, ltkS),
-    !Pk(C, pkC)
+    !Pk(C, pkC),
     Fr(~y)
   ]
-  --[ Neq(gy, gx),
+  --[ Neq(C, S),
+      Neq(gy, gx),
       Eq(verify(sigIn, msgIn, pkC), true),
       ServerDone(S, C, gx, gy, k) ]->
   [
@@ -125,7 +127,7 @@ lemma ClientLiveness:
   "
   All C S gx gy k #i.
     ServerDone(S, C, gx, gy, k) @ #i
-    ==> ( (Ex #j. (ClientSentInitKey(C, S, gx) @ #j) & (#j < #i))
+    ==> ( (Ex #j. (ClientSentInitKey(C, gx) @ #j) & (#j < #i))
         | (Ex #rc. LtkReveal(C) @ #rc)
         | (Ex #rs. LtkReveal(S) @ #rs)
         )
