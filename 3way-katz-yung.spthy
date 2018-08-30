@@ -191,6 +191,20 @@ lemma KeySecrecy:
   )
   "
 
+// If an existing user and a new joiner both think that someone
+// added them, it's because someone did.  Unless that person's key
+// has been compromised.
+lemma AdderLiveness:
+  "
+  All A B C key #i #j.
+    ( ThreeUserB(A, B, C, key) @ #i
+    & ThreeUserC(A, B, C, key) @ #j
+    )
+    ==> ( (Ex #k. ThreeUserA(A, B, C, key) @ #k)
+        | (Ex #l. LtkReveal(A) @ #l)
+        )
+  "
+
 // If an existing user and a new joiner both see an add and arrive
 // at the same key, then they agree on the roster.
 //
@@ -209,45 +223,22 @@ lemma RosterConsistency:
         )
   "
 
-
-/*
-// If a client has established a session key
-// ... then it's based on a response from a server
-lemma ServerLiveness:
-  "
-  All C S gx gy k #i.
-    ClientDone(C, S, gx, gy, k) @ #i
-    ==> ( (Ex #j. (ServerDone(S, C, gx, gy, k) @ #j) & (#j < #i))
-        | (Ex #rc. LtkReveal(C) @ #rc)
-        | (Ex #rs. LtkReveal(S) @ #rs)
-        )
-  "
-
-// If a server has established a session key
-// ... then it's based on a request from a client
-lemma ClientLiveness:
-  "
-  All C S gx gy k #i.
-    ServerDone(S, C, gx, gy, k) @ #i
-    ==> ( (Ex #j. (ClientSentInitKey(C, S, gx) @ #j) & (#j < #i))
-        | (Ex #rc. LtkReveal(C) @ #rc)
-        | (Ex #rs. LtkReveal(S) @ #rs)
-        )
-  "
-
 // ... injective agreement
 lemma InjectiveAgreement:
   "
-  All C S gx gy k #i.
-    ServerDone(S, C, gx, gy, k) @ #i
-    ==> ( not(Ex C2 S2 gx2 gy2 #i2.
-              ServerDone(S2, C2, gx2, gy2, k) @ #i2
-             & not(#i2 = #i)
-             )
-        | (Ex #rc. LtkReveal(C) @ #rc)
-        | (Ex #rs. LtkReveal(S) @ #rs)
+  All A1 A2 B1 B2 C1 C2 key #i1 #j1 #i2 #j2.
+    ( ThreeUserB(A1, B1, C1, key) @ #i1
+    & ThreeUserC(A1, B1, C1, key) @ #j1
+    & ThreeUserB(A2, B2, C2, key) @ #i2
+    & ThreeUserC(A2, B2, C2, key) @ #j2
+    )
+    ==> ( ( (A1 = A1)
+          & (B1 = B2)
+          & (C1 = C2)
+          )
+        | (Ex #r1. LtkReveal(A1) @ #r1)
+        | (Ex #r2. LtkReveal(A2) @ #r2)
         )
   "
-*/
 
 end
