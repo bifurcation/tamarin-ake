@@ -32,7 +32,7 @@ rule ClientInit:
   --[ ClientSentRequest(C, $S, ~x) ]->
   [
     ClientWait(C, $S, ~x, ltkC),
-    Out(C, 'g'^~x)
+    Out(<C, 'g'^~x>)
   ]
 
 rule ClientFinish:
@@ -40,7 +40,7 @@ rule ClientFinish:
     gx = 'g'^x
     msg = <C, gx, S, gy>
     sigOut = sign(msg, ltkC)
-    k = gx^~y
+    k = gy^x
   in
   [
     In(<gy, S, sigIn>),
@@ -75,16 +75,17 @@ rule ServerFinish:
   let
     gy = 'g'^y
     msg = <C, gx, S, gy>
-    k = gy^x
+    k = gx^y
   in
   [
     In(<sig>),
     !Pk(C, pkC),
     ServerWait(S, C, gx, y)
   ]
-  --[ Neq(gy, 'g'^x),
+  --[ Neq(C, S),
+      Neq(gy, gx),
       Eq(verify(sig, msg, pkC), true),
-      ServerDone(S, C, 'g'^x, gy, k) ]->
+      ServerDone(S, C, gx, gy, k) ]->
   []
 
 // Restrictions
