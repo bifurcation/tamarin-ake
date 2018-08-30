@@ -1,7 +1,7 @@
 theory 3way_Katz_Yung
 begin
 
-builtins: diffie-hellman, signing
+builtins: diffie-hellman, signing, hashing
 
 // PKI Provisioning
 rule RegisterPK:
@@ -91,7 +91,7 @@ rule AddSecondUser:
     msgIn = <C, gz>
     msgOut = <A, B, gk, C, gz>
     sigOut = sign(msgOut, ltkA)
-    k1 = gz^k
+    k1 = h(<gz^k, A, B, C>)
   in
   [
     In(<C, gz, sigIn>),
@@ -113,7 +113,7 @@ rule ReceiveSecondAddExisting:
   let
     gk = 'g'^k
     msg = <A, B, gk, C, gz>
-    k1 = gz^k
+    k1 = h(<gz^k, A, B, C>)
   in
   [
     In(<gz, A, B, C, sig>),
@@ -131,7 +131,7 @@ rule ReceiveSecondAddNew:
   let
     gz = 'g'^z
     msg = <A, B, gk, C, gz>
-    k1 = gk^z
+    k1 = h(<gk^z, A, B, C>)
   in
   [
     In(<gz, gk, A, B, C, sig>),
@@ -196,6 +196,8 @@ lemma KeySecrecy:
 //
 // Note that there's no exception here for compromise of the adding
 // member's key, so this holds even if the adding user is malicious.
+//
+// Note that this implies injective agreement.
 lemma RosterConsistency:
   "
   All A B1 B2 C1 C2 key #i #j.
