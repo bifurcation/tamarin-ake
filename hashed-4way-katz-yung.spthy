@@ -1,0 +1,379 @@
+theory Hashed_4way_Katz_Yung
+begin
+
+builtins: diffie-hellman, signing, hashing
+
+// PKI Provisioning
+rule RegisterPK:
+  [ Fr(~ltk) ]
+  -->
+  [
+    !Ltk($A, ~ltk),
+    !Pk($A, pk(~ltk)),
+    Out(pk(~ltk))
+  ]
+
+rule RevealLTK:
+  [ !Ltk(A, ltk) ]
+  --[ LtkReveal(A) ]->
+  [ Out(ltk) ]
+
+
+// k = g^xy
+// roster = h(A | B)
+// transcript = h(g^x | g^y)
+// B->A: B, g^y, Sig_A(B | g^x)
+// A->B: A, g^x, Sig_A(roster | transcript)
+//
+// k1 = g^zk
+// roster1 = h(roster | C)
+// transcript1 = h(transcript | g^k | g^z)
+// C->A: C, g^z, Sig_C(C | g^z)
+// A->B: C, g^z, Sig_A(roster1 | transcript1)
+// A->C: roster, transcript, g^k, Sig_A(roster1 | transcript1)
+//
+// k2 = g^zk1
+// roster2 = h(roster1 | D)
+// transcript2 = h(transcript1 | g^k1 | g^w)
+// D->A: D, g^w, Sig_D(D | g^w)
+// A->B: D, g^w, Sig_A(roster2 | transcript2)
+// A->D: roster1, transcript1, g^k1, Sig_A(roster2 | transcript2)
+
+rule PostInitKey:
+  let
+    gx = 'g'^~x
+    msg = <A, gx>
+    sig = sign(msg, ltkA)
+  in
+  [
+    !Ltk(A, ltkA),
+    Fr(~x)
+  ]
+  --[ PostedInitKey(A, gx) ]->
+  [
+    InitKeyPriv(A, ~x, ltkA),
+    InitKey(A, gx, sig),
+    Out(<A, gx, sig>)
+  ]
+
+// First user joins
+rule AddFirstUser:
+  let
+    gx = 'g'^~x
+    msgIn = <B, gy>
+    roster0 = h(<A, B>)
+    transcript0 = h(<gx, gy>)
+    msgOut = <roster0, transcript0>
+    sigOut = sign(msgOut, ltkA)
+    k0 = h(<gy^~x, roster0>)
+  in
+  [
+    In(<B, gy, sigIn>),
+    InitKey(B, gy, sigIn),
+    !Ltk(A, ltkA),
+    !Pk(B, pkB),
+    Fr(~x)
+  ]
+  --[ Neq(A, B),
+      Eq(verify(sigIn, msgIn, pkB), true),
+      TwoUserA(A, B, k0) ]->
+  [
+    JoinedTwoUserA(A, B, roster0, transcript0, k0),
+    Out(<gx, A, sigOut>)
+  ]
+
+rule ReceiveFirstAdd:
+  let
+    gy = 'g'^y
+    roster0 = h(<A, B>)
+    transcript0 = h(<gx, gy>)
+    msg = <roster0, transcript0>
+    k0 = h(<gx^y, roster0>)
+  in
+  [
+    In(<gx, A, sig>),
+    InitKeyPriv(B, y, ltkB),
+    !Pk(A, pkA)
+  ]
+  --[ Neq(A, B),
+      Eq(verify(sig, msg, pkA), true),
+      TwoUserB(A, B, k0) ]->
+  [
+    JoinedTwoUserB(A, B, roster0, transcript0, k0)
+  ]
+
+// Second user joins
+rule AddSecondUser:
+  let
+    gk0 = 'g'^k0
+    msgIn = <C, gz>
+    roster1 = h(<roster0, C>)
+    transcript1 = h(<transcript0, gk0, gz>)
+    msgOut = <roster1, transcript1>
+    sigOut = sign(msgOut, ltkA)
+    k1 = h(<gz^k0, roster1>)
+  in
+  [
+    In(<C, gz, sigIn>),
+    InitKey(C, gz, sigIn),
+    JoinedTwoUserA(A, B, roster0, transcript0, k0),
+    !Ltk(A, ltkA),
+    !Pk(C, pkC)
+  ]
+  --[ Neq(A, C),
+      Neq(B, C),
+      Eq(verify(sigIn, msgIn, pkC), true),
+      ThreeUserA(A, B, C, k1) ]->
+  [
+    JoinedThreeUserA(A, B, C, roster1, transcript1, k1),
+    Out(<gz, gk0, roster0, transcript0, C, sigOut>)
+  ]
+
+rule ReceiveSecondAddExisting:
+  let
+    gk0 = 'g'^k0
+    roster1 = h(<roster0, C>)
+    transcript1 = h(<transcript0, gk0, gz>)
+    msg = <roster1, transcript1>
+    k1 = h(<gz^k0, roster1>)
+  in
+  [
+    In(<gz, C, sig>),
+    JoinedTwoUserB(A, B, roster0, transcript0, k0),
+    !Pk(A, pkA)
+  ]
+  --[ Neq(B, C),
+      Eq(verify(sig, msg, pkA), true),
+      ThreeUserB(A, B, C, k1) ]->
+  [
+    JoinedThreeUserB(A, B, C, roster1, transcript1, k1)
+  ]
+
+rule ReceiveSecondAddNew:
+  let
+    gz = 'g'^z
+    roster1 = h(<roster0, C>)
+    transcript1 = h(<transcript0, gk0, gz>)
+    msg = <roster1, transcript1>
+    k1 = h(<gk0^z, roster1>)
+  in
+  [
+    In(<gk0, B, roster0, transcript0, sig>),
+    InitKeyPriv(C, z, ltkC),
+    !Pk(A, pkA)
+  ]
+  --[ Neq(A, C),
+      Neq(B, C),
+      Eq(h(<A, B>), roster0),
+      Eq(verify(sig, msg, pkA), true),
+      ThreeUserC(A, B, C, k1) ]->
+  [
+    JoinedThreeUserC(A, B, C, roster1, transcript1, k1)
+  ]
+
+// Third user joins
+rule AddThirdUser:
+  let
+    gk1 = 'g'^k1
+    msgIn = <D, gw>
+    roster2 = h(<roster1, D>)
+    transcript2 = h(<transcript1, gk1, gw>)
+    msgOut = <roster2, transcript2>
+    sigOut = sign(msgOut, ltkA)
+    k2 = h(<gw^k1, roster2>)
+  in
+  [
+    In(<D, gw, sigIn>),
+    InitKey(D, gw, sigIn),
+    JoinedThreeUserA(A, B, C, roster1, transcript1, k1),
+    !Ltk(A, ltkA),
+    !Pk(D, pkD)
+  ]
+  --[ Neq(A, D),
+      Neq(B, D),
+      Neq(C, D),
+      Eq(verify(sigIn, msgIn, pkD), true),
+      FourUserA(A, B, C, D, k2) ]->
+  [
+    JoinedFourUserA(A, B, C, D, k2),
+    Out(<gw, gk1, roster2, transcript2, C, sigOut>)
+  ]
+
+rule ReceiveThirdAddB:
+  let
+    gk1 = 'g'^k1
+    roster2 = h(<roster1, D>)
+    transcript2 = h(<transcript1, gk1, gw>)
+    msg = <roster2, transcript2>
+    k2 = h(<gw^k1, roster2>)
+  in
+  [
+    In(<gw, D, sig>),
+    JoinedThreeUserB(A, B, C, roster1, transcript1, k1),
+    !Pk(A, pkA)
+  ]
+  --[ Neq(B, D),
+      Eq(verify(sig, msg, pkA), true),
+      FourUserB(A, B, C, D, k2) ]->
+  [
+    JoinedFourUserB(A, B, C, D, roster2, transcript2, k2)
+  ]
+
+rule ReceiveThirdAddC:
+  let
+    gk1 = 'g'^k1
+    roster2 = h(<roster1, D>)
+    transcript2 = h(<transcript1, gk1, gw>)
+    msg = <roster2, transcript2>
+    k2 = h(<gw^k1, roster2>)
+  in
+  [
+    In(<gw, D, sig>),
+    JoinedThreeUserC(A, B, C, roster1, transcript1, k1),
+    !Pk(A, pkA)
+  ]
+  --[ Neq(B, D),
+      Eq(verify(sig, msg, pkA), true),
+      FourUserC(A, B, C, D, k2) ]->
+  [
+    JoinedFourUserC(A, B, C, D, roster2, transcript2, k2)
+  ]
+
+rule ReceiveThirdAddNew:
+  let
+    gw = 'g'^w
+    roster2 = h(<roster1, D>)
+    transcript2 = h(<transcript1, gk1, gw>)
+    msg = <roster1, transcript1>
+    k2 = h(<gk1^w, roster2>)
+  in
+  [
+    In(<gk1, B, C, roster1, transcript1, sig>),
+    InitKeyPriv(D, w, ltkD),
+    !Pk(A, pkA)
+  ]
+  --[ Neq(A, D),
+      Neq(B, D),
+      Neq(C, D),
+      Eq(h(<h(<A, B>), C>), roster1),
+      Eq(verify(sig, msg, pkA), true),
+      FourUserD(A, B, C, D, k2) ]->
+  [
+    JoinedFourUserD(A, B, C, D, roster2, transcript2, k2)
+  ]
+
+// Restrictions
+restriction Equality:
+  "All x y #i. Eq(x,y) @i ==> x = y"
+
+restriction Inequality:
+  "All x y #i. Neq(x,y) @i ==> not(x = y)"
+
+// Functionality test
+lemma TwoPartyExecutable:
+  exists-trace
+  "
+    Ex A B key #i #j.
+        TwoUserA(A, B, key) @ #i
+      & TwoUserB(A, B, key) @ #j
+      & not(Ex X #k. LtkReveal(X) @ #k)
+  "
+
+lemma ThreePartyExecutable:
+  exists-trace
+  "
+    Ex A B C key #i #j #k.
+        ThreeUserA(A, B, C, key) @ #i
+      & ThreeUserB(A, B, C, key) @ #j
+      & ThreeUserC(A, B, C, key) @ #k
+      & not(Ex X #r. LtkReveal(X) @ #r)
+  "
+
+lemma FourPartyExecutable:
+  exists-trace
+  "
+    Ex A B C D key #i #j #k #l.
+        FourUserA(A, B, C, D, key) @ #i
+      & FourUserB(A, B, C, D, key) @ #j
+      & FourUserC(A, B, C, D, key) @ #k
+      & FourUserD(A, B, C, D, key) @ #l
+      & not(Ex X #r. LtkReveal(X) @ #r)
+  "
+
+
+// If three clients have established a key,
+// ... it is not known to the attacker
+// ... unless one of the long-term keys was compromised
+lemma KeySecrecy:
+  "
+  not(Ex A B C D key #i #j #k #l #m.
+        FourUserA(A, B, C, D, key) @ #i
+      & FourUserB(A, B, C, D, key) @ #j
+      & FourUserC(A, B, C, D, key) @ #k
+      & FourUserD(A, B, C, D, key) @ #l
+      & K(key) @ #m
+      & not(Ex X #r. LtkReveal(X) @ #r)
+  )
+  "
+
+// If an existing user and a new joiner both think that someone
+// added them, it's because someone did.  Unless that person's key
+// has been compromised.
+lemma AdderLivenessB:
+  "
+  All A B C D key #i #j.
+    ( FourUserB(A, B, C, D, key) @ #i
+    & FourUserD(A, B, C, D, key) @ #j
+    )
+    ==> ( (Ex #l. FourUserA(A, B, C, D, key) @ #l)
+        | (Ex #r. LtkReveal(A) @ #r)
+        )
+  "
+
+lemma AdderLivenessC:
+  "
+  All A B C D key #i #j.
+    ( FourUserC(A, B, C, D, key) @ #i
+    & FourUserD(A, B, C, D, key) @ #j
+    )
+    ==> ( (Ex #l. FourUserA(A, B, C, D, key) @ #l)
+        | (Ex #r. LtkReveal(A) @ #r)
+        )
+  "
+
+// If an existing user and a new joiner both see an add and arrive
+// at the same key, then they agree on the roster.
+//
+// Note that there's no exception here for compromise of the adding
+// member's key, so this holds even if the adding user is malicious.
+lemma RosterConsistency:
+  "
+  All A B1 B2 B3 C1 C2 C3 D1 D2 D3 key #i #j #k.
+    ( FourUserB(A, B1, C1, D1, key) @ #i
+    & FourUserC(A, B2, C2, D2, key) @ #j
+    & FourUserD(A, B3, C3, D3, key) @ #k
+    )
+    ==> ( (B1 = B2) & (B2 = B3)
+        & (C1 = C2) & (C2 = C3)
+        & (D1 = D2) & (D2 = D3)
+        )
+  "
+
+// ... injective agreement
+lemma InjectiveAgreement:
+  "
+  All A1 A2 B1 B2 C1 C2 D1 D2 key #i1 #i2.
+    ( FourUserA(A1, B1, C1, D1, key) @ #i1
+    & FourUserA(A2, B2, C2, D2, key) @ #i2
+    )
+    ==> ( ( (A1 = A1)
+          & (B1 = B2)
+          & (C1 = C2)
+          & (D1 = D2)
+          )
+        | (Ex #r1. LtkReveal(A1) @ #r1)
+        | (Ex #r2. LtkReveal(A2) @ #r2)
+        )
+  "
+
+end
