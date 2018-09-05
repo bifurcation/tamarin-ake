@@ -1,4 +1,4 @@
-theory 3way_Katz_Yung
+theory Hashed_3way_Katz_Yung
 begin
 
 builtins: diffie-hellman, signing, hashing
@@ -47,11 +47,11 @@ rule AddFirstUser:
   let
     gx = 'g'^~x
     msgIn = <B, gy>
-    roster = h(<A, B>)
-    transcript = h(<gx, gy>)
-    msgOut = <roster, transcript>
+    roster0 = h(<A, B>)
+    transcript0 = h(<gx, gy>)
+    msgOut = <roster0, transcript0>
     sigOut = sign(msgOut, ltkA)
-    k = h(gy^~x, roster)
+    k0 = h(<gy^~x, roster0>)
   in
   [
     In(<B, gy, sigIn>),
@@ -62,19 +62,19 @@ rule AddFirstUser:
   ]
   --[ Neq(A, B),
       Eq(verify(sigIn, msgIn, pkB), true),
-      TwoUserA(A, B, k) ]->
+      TwoUserA(A, B, k0) ]->
   [
-    JoinedTwoUserA(A, B, roster, transcript, k),
+    JoinedTwoUserA(A, B, roster0, transcript0, k0),
     Out(<gx, A, sigOut>)
   ]
 
 rule ReceiveFirstAdd:
   let
     gy = 'g'^y
-    roster = h(<A, B>)
-    transcript = h(<gx, gy>)
-    msg = <roster, transcript>
-    k = h(gx^y, roster)
+    roster0 = h(<A, B>)
+    transcript0 = h(<gx, gy>)
+    msg = <roster0, transcript0>
+    k0 = h(<gx^y, roster0>)
   in
   [
     In(<gx, A, sig>),
@@ -83,26 +83,26 @@ rule ReceiveFirstAdd:
   ]
   --[ Neq(A, B),
       Eq(verify(sig, msg, pkA), true),
-      TwoUserB(A, B, k) ]->
+      TwoUserB(A, B, k0) ]->
   [
-    JoinedTwoUserB(A, B, roster, transcript, k)
+    JoinedTwoUserB(A, B, roster0, transcript0, k0)
   ]
 
 // Second user joins
 rule AddSecondUser:
   let
-    gk = 'g'^k
+    gk0 = 'g'^k0
     msgIn = <C, gz>
-    roster1 = h(<roster, C>)
-    transcript1 = h(<transcript, gk, gz>)
+    roster1 = h(<roster0, C>)
+    transcript1 = h(<transcript0, gk0, gz>)
     msgOut = <roster1, transcript1>
     sigOut = sign(msgOut, ltkA)
-    k1 = h(<gz^k, roster1>)
+    k1 = h(<gz^k0, roster1>)
   in
   [
     In(<C, gz, sigIn>),
     InitKey(C, gz, sigIn),
-    JoinedTwoUserA(A, B, roster, transcript, k),
+    JoinedTwoUserA(A, B, roster0, transcript0, k0),
     !Ltk(A, ltkA),
     !Pk(C, pkC)
   ]
@@ -112,20 +112,20 @@ rule AddSecondUser:
       ThreeUserA(A, B, C, k1) ]->
   [
     JoinedThreeUserA(A, B, C, k1),
-    Out(<gz, gk, roster, transcript, C, sigOut>)
+    Out(<gz, gk0, roster1, transcript1, C, sigOut>)
   ]
 
 rule ReceiveSecondAddExisting:
   let
-    gk = 'g'^k
-    roster1 = h(<roster, C>)
-    transcript1 = h(<transcript, gk, gz>)
+    gk0 = 'g'^k0
+    roster1 = h(<roster0, C>)
+    transcript1 = h(<transcript0, gk0, gz>)
     msg = <roster1, transcript1>
-    k1 = h(<gz^k, roster1>)
+    k1 = h(<gz^k0, roster1>)
   in
   [
     In(<gz, C, sig>),
-    JoinedTwoUserB(A, B, roster, transcript, k),
+    JoinedTwoUserB(A, B, roster0, transcript0, k0),
     !Pk(A, pkA)
   ]
   --[ Neq(B, C),
@@ -138,19 +138,19 @@ rule ReceiveSecondAddExisting:
 rule ReceiveSecondAddNew:
   let
     gz = 'g'^z
-    roster1 = h(<roster, C>)
-    transcript1 = h(<transcript, gk, gz>)
+    roster1 = h(<roster0, C>)
+    transcript1 = h(<transcript0, gk0, gz>)
     msg = <roster1, transcript1>
-    k1 = h(<gz^k, roster1>)
+    k1 = h(<gk0^z, roster1>)
   in
   [
-    In(<gk, B, roster, transcript, sig>),
+    In(<gk0, B, roster0, transcript0, sig>),
     InitKeyPriv(C, z, ltkC),
     !Pk(A, pkA)
   ]
   --[ Neq(A, C),
       Neq(B, C),
-      Eq(h(<A, B>), roster),
+      Eq(h(<A, B>), roster0),
       Eq(verify(sig, msg, pkA), true),
       ThreeUserC(A, B, C, k1) ]->
   [
