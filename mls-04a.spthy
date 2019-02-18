@@ -1,0 +1,197 @@
+theory MLS04
+begin
+
+builtins: hashing, signing, asymmetric-encryption
+
+// MAC
+functions: mac/2
+
+// PKI Provisioning
+rule RegisterPK:
+  [ Fr(~ltk) ]
+  -->
+  [
+    !Ltk($A, ~ltk),
+    !Pk($A, pk(~ltk)),
+    Out(pk(~ltk))
+  ]
+
+rule RevealLTK:
+  [ !Ltk(A, ltk) ]
+  --[ LtkReveal(A) ]->
+  [ Out(ltk) ]
+
+
+// C->S: g^x, C, Sig_C(g^x)
+// S->C: g^y, S, Sig_S(g^x) MAC_k(g^x)
+//       k = H(g^x || g^y || C || S)
+
+// Client logic
+rule ClientInit:
+  let
+    gx = pk(~x)
+    pkC = pk(ltkC)
+    sig = sign(<gx, C, pkC>, ltkC)
+    uik = <gx, C, pkC, sig>
+  in
+  [
+    !Ltk(C, ltkC),
+    Fr(~x)
+  ]
+  --[ ClientPostedInitKey(C, gx) ]->
+  [
+    ClientWait(C, ~x, ltkC),
+    Out(uik)
+  ]
+
+rule ClientFinish:
+  let
+    gx = pk(x)
+    pkC = pk(ltkC)
+
+    // welcomeInfo = <gy, k, S, pkS>
+    welcomeInfo = adec(welcome, x)
+    gy = fst(welcomeInfo)
+    k = fst(snd(welcomeInfo))
+    S = fst(snd(snd(welcomeInfo)))
+    pkS = snd(snd(snd(welcomeInfo)))
+
+    // add = <'add', gx, C, pkC, sig>
+    addTag = fst(add)
+    gxIn = fst(snd(add))
+    CIn = fst(snd(snd(add)))
+    pkCIn = fst(snd(snd(snd(add))))
+
+    macData = add
+    state = <C, S, pkC, pkS, gx, gy>
+    confirmKey = mac(k, state)
+    macValVer = mac(confirmKey, macData)
+  in
+  [
+    ClientWait(C, x, ltkC),
+    !Pk(S, pkS),
+    In(<welcome, add, addMAC, addSig>)
+  ]
+  --[ Neq(gx, gy),
+      Eq(addTag, 'add'),
+      Eq(gxIn, gx),
+      Eq(CIn, C),
+      Eq(pkCIn, pkC),
+      Eq(verify(addSig, <add, addMAC>, pkS), true),
+      Eq(macValVer, addMAC),
+      ClientDone(C, S, gx, gy, k) ]->
+  []
+
+// Server logic
+rule ServerInit:
+  let
+    uik = <gx, C, pkC, sig>
+
+    gy = pk(~y)
+    pkS = pk(ltkS)
+    welcomeInfo = <gy, ~k, S, pkS>
+    welcome = aenc(welcomeInfo, gx)
+
+
+    add = <'add', uik>
+
+    macData = add
+    state = <C, S, pkC, pkS, gx, gy>
+    confirmKey = mac(~k, state)
+    addMAC = mac(confirmKey, macData)
+
+    sigData = <add, addMAC>
+    addSig = sign(sigData, ltkS)
+  in
+  [
+    In(<gx, C, sig>),
+    !Pk(C, pkC),
+    !Ltk(S, ltkS),
+    Fr(~y),
+    Fr(~k)
+  ]
+  --[ Eq(verify(sig, <gx, C, pkC>, pkC), true),
+      ServerDone(S, C, gx, gy, ~k) ]->
+  [
+    Out(<welcome, add, addSig, addMAC>)
+  ]
+
+// Restrictions
+restriction Equality:
+  "All x y #i. Eq(x,y) @i ==> x = y"
+
+restriction Inequality:
+  "All x y #i. Neq(x,y) @i ==> not(x = y)"
+
+// Functionality test
+lemma HonestServerTrace:
+  exists-trace
+  "
+    Ex C S gx gy k #j.
+        ServerDone(S, C, gx, gy, k) @ #j
+      & not(Ex A #k. LtkReveal(A) @ #k)
+  "
+
+lemma HonestTrace:
+  exists-trace
+  "
+    Ex C S gx gy k #i #j.
+        ClientDone(C, S, gx, gy, k) @ #i
+      & ServerDone(S, C, gx, gy, k) @ #j
+      & not(Ex A #k. LtkReveal(A) @ #k)
+  "
+
+// If a client has established a session key,
+// ... then the server has the same key,
+// ... and it is not known to the attacker
+// ... unless one of the long-term keys was compromised
+lemma KeySecrecy:
+  "
+  not(Ex C S gx gy k #i #j #k.
+        ClientDone(C, S, gx, gy, k) @ #i
+      & ServerDone(S, C, gx, gy, k) @ #j
+      & K(k) @ #k
+      & not(Ex #rc. LtkReveal(C) @ #rc)
+      & not(Ex #rs. LtkReveal(S) @ #rs)
+  )
+  "
+
+// If a client has established a session key
+// ... then it's based on a response from a server
+lemma ServerLiveness:
+  "
+  All C S gx gy k #i.
+    ClientDone(C, S, gx, gy, k) @ #i
+    ==> ( (Ex #j. (ServerDone(S, C, gx, gy, k) @ #j) & (#j < #i))
+        | (Ex #rc. LtkReveal(C) @ #rc)
+        | (Ex #rs. LtkReveal(S) @ #rs)
+        )
+  "
+
+// If a server has established a session key
+// ... then it's based on a client's init key
+lemma ClientLiveness:
+  "
+  All C S gx gy k #i.
+    ServerDone(S, C, gx, gy, k) @ #i
+    ==> ( (Ex #j. (ClientPostedInitKey(C, gx) @ #j) & (#j < #i))
+        | (Ex #rc. LtkReveal(C) @ #rc)
+        | (Ex #rs. LtkReveal(S) @ #rs)
+        )
+  "
+
+// ... injective agreement
+lemma InjectiveAgreement:
+  "
+  All C S gx gy k #i.
+    ServerDone(S, C, gx, gy, k) @ #i
+    ==> ( not(Ex C2 S2 gx2 gy2 #i2.
+              ServerDone(S2, C2, gx2, gy2, k) @ #i2
+             & not(#i2 = #i)
+             )
+        | (Ex #rc. LtkReveal(C) @ #rc)
+        | (Ex #rs. LtkReveal(S) @ #rs)
+        )
+  "
+
+end
