@@ -21,11 +21,6 @@ rule RevealLTK:
   --[ LtkReveal(A) ]->
   [ Out(ltk) ]
 
-
-// C->S: g^x, C, Sig_C(g^x)
-// S->C: g^y, S, Sig_S(g^x) MAC_k(g^x)
-//       k = H(g^x || g^y || C || S)
-
 // Client logic
 rule ClientInit:
   let
