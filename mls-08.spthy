@@ -1,0 +1,209 @@
+theory MLS08
+begin
+
+builtins: hashing, signing, asymmetric-encryption
+
+// MAC
+functions: mac/2
+
+// PKI Provisioning
+rule RegisterPK:
+  [ Fr(~ltk) ]
+  -->
+  [
+    !Ltk($A, ~ltk),
+    !Pk($A, pk(~ltk)),
+    Out(pk(~ltk))
+  ]
+
+rule RevealLTK:
+  [ !Ltk(A, ltk) ]
+  --[ LtkReveal(A) ]->
+  [ Out(ltk) ]
+
+
+// A->B: CIK=<gx, pkA, A, sigCIK>
+// B->A: Welcome=Enc(<hCIK, gy, initSecret, S, pkS>, sig)
+
+
+// Client logic
+rule PostInitKey:
+  let
+    gx = pk(~x)
+    pkA = pk(ltkA)
+    sig = sign(<gx, A, pkA>, ltkA)
+  in
+  [
+    !Ltk(A, ltkA),
+    Fr(~x)
+  ]
+  --[ PostedInitKey(A, gx) ]->
+  [
+    InitKeyPriv(A, ~x, ltkA),
+    InitKey(gx, A, pkA, sig),
+    Out(<gx, A, pkA, sig>)
+  ]
+
+rule ClientFinish:
+  let
+    gx = pk(x)
+    pkC = pk(ltkC)
+
+    // welcome = aenc(<welcomeInfo, welcomeSig>, gx)
+    welcomeData = adec(welcome, x)
+    welcomeInfo = fst(welcomeData)
+    welcomeSig = snd(welcomeData)
+
+    // welcomeInfo = <gy, h(CIK), k, S, pkS>
+    hCIK = fst(welcomeInfo)
+    gy = fst(snd(welcomeInfo))
+    epochSecret0 = fst(snd(snd(welcomeInfo)))
+    cTranscript0 = fst(snd(snd(snd(welcomeInfo))))
+    tree0 = fst(snd(snd(snd(snd(welcomeInfo)))))
+    S = fst(tree0)
+    pkS = snd(tree0)
+  in
+  [
+    ClientWait(C, x, ltkC, cik),
+    !Pk(S, pkS),
+    In(welcome)
+  ]
+  --[ Neq(gx, gy),
+      Eq(hCIK, h(cik)),
+      Eq(verify(welcomeSig, welcomeInfo, pkS), true),
+      ClientDone(C, S, gx, gy, epochSecret0) ]->
+  []
+
+// Server logic
+rule ServerInit:
+  let
+    cik = <gy, B, pkB, sig>
+    hCIK = h(cik)
+
+    gx = pk(~x)
+    pkA = pk(ltkA)
+    tree0 = <A, pkA>
+    welcomeInfo = <hCIK, gx, ~epochSecret0, ~cTranscript0, tree0>
+    welcomeSig = sign(welcomeInfo, ltkA)
+    welcome = aenc(<welcomeInfo, welcomeSig>, gx)
+  in
+  [
+    In(<gy, B, sig>),
+    !Pk(B, pkB),
+    !Ltk(A, ltkA),
+    Fr(~x),
+    Fr(~cTranscript0),
+    Fr(~epochSecret0)
+  ]
+  --[ Neq(A, B),
+      Eq(verify(sig, <gy, B, pkB>, pkB), true),
+      TwoUserA(A, B, gx, gy, ~epochSecret0) ]->
+  [
+    JoinedTwoUserA(A, B, ~cTranscript0, ~epochSecret0),
+    Out(welcome)
+  ]
+/*
+rule ServerInit:
+  let
+    cik = <gx, C, pkC, sig>
+    hCIK = h(cik)
+
+    gy = pk(~y)
+    pkS = pk(ltkS)
+    welcomeInfo = <hCIK, gy, ~k, S, pkS>
+    welcomeSig = sign(welcomeInfo, ltkS)
+    welcome = aenc(<welcomeInfo, welcomeSig>, gx)
+  in
+  [
+    In(<gx, C, sig>),
+    !Pk(C, pkC),
+    !Ltk(S, ltkS),
+    Fr(~y),
+    Fr(~k)
+  ]
+  --[ Eq(verify(sig, <gx, C, pkC>, pkC), true),
+      TwoUserA(S, C, gx, gy, ~k) ]->
+  [
+    Out(welcome)
+  ]
+  */
+
+// Restrictions
+restriction Equality:
+  "All x y #i. Eq(x,y) @i ==> x = y"
+
+restriction Inequality:
+  "All x y #i. Neq(x,y) @i ==> not(x = y)"
+
+// Functionality test
+lemma HonestServerTrace:
+  exists-trace
+  "
+    Ex C S gx gy k #j.
+        TwoUserA(S, C, gx, gy, k) @ #j
+      & not(Ex A #k. LtkReveal(A) @ #k)
+  "
+
+lemma HonestTrace:
+  exists-trace
+  "
+    Ex C S gx gy k #i #j.
+        ClientDone(C, S, gx, gy, k) @ #i
+      & TwoUserA(S, C, gx, gy, k) @ #j
+      & not(Ex A #k. LtkReveal(A) @ #k)
+  "
+
+// If a client has established a session key,
+// ... then the server has the same key,
+// ... and it is not known to the attacker
+// ... unless one of the long-term keys was compromised
+lemma KeySecrecy:
+  "
+  not(Ex C S gx gy k #i #j #k.
+        ClientDone(C, S, gx, gy, k) @ #i
+      & TwoUserA(S, C, gx, gy, k) @ #j
+      & K(k) @ #k
+      & not(Ex #rc. LtkReveal(C) @ #rc)
+      & not(Ex #rs. LtkReveal(S) @ #rs)
+  )
+  "
+
+// If a client has established a session key
+// ... then it's based on a response from a server
+lemma ServerLiveness:
+  "
+  All C S gx gy k #i.
+    ClientDone(C, S, gx, gy, k) @ #i
+    ==> ( (Ex #j. (TwoUserA(S, C, gx, gy, k) @ #j) & (#j < #i))
+        | (Ex #rc. LtkReveal(C) @ #rc)
+        | (Ex #rs. LtkReveal(S) @ #rs)
+        )
+  "
+
+// If a server has established a session key
+// ... then it's based on a client's init key
+lemma ClientLiveness:
+  "
+  All C S gx gy k #i.
+    TwoUserA(S, C, gx, gy, k) @ #i
+    ==> ( (Ex #j. (PostedInitKey(C, gx) @ #j) & (#j < #i))
+        | (Ex #rc. LtkReveal(C) @ #rc)
+        | (Ex #rs. LtkReveal(S) @ #rs)
+        )
+  "
+
+// ... injective agreement
+lemma InjectiveAgreement:
+  "
+  All C S gx gy k #i.
+    TwoUserA(S, C, gx, gy, k) @ #i
+    ==> ( not(Ex C2 S2 gx2 gy2 #i2.
+              TwoUserA(S2, C2, gx2, gy2, k) @ #i2
+             & not(#i2 = #i)
+             )
+        | (Ex #rc. LtkReveal(C) @ #rc)
+        | (Ex #rs. LtkReveal(S) @ #rs)
+        )
+  "
+
+end
