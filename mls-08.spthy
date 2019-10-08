@@ -25,7 +25,6 @@ rule RevealLTK:
 // B->A: CIK=<gy, pkB, B, sigCIK>
 // A->B: Welcome=Enc(<hCIK, gx, initSecret, A, pkA>, sig)
 
-
 rule PostInitKey:
   let
     gx = pk(~x)
@@ -43,8 +42,8 @@ rule PostInitKey:
     Out(cik)
   ]
 
-// Server logic
-rule ServerInit:
+// First user joins
+rule AddFirstUser:
   let
     cik = <gy, B, pkB, sig>
     hCIK = h(cik)
@@ -69,7 +68,7 @@ rule ServerInit:
     Out(welcome)
   ]
 
-rule AddFirstUser:
+rule ReceiveFirstWelcome:
   let
     gy = pk(y)
     pkB = pk(ltkB)
