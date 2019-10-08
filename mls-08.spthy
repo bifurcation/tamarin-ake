@@ -22,57 +22,26 @@ rule RevealLTK:
   [ Out(ltk) ]
 
 
-// A->B: CIK=<gx, pkA, A, sigCIK>
-// B->A: Welcome=Enc(<hCIK, gy, initSecret, S, pkS>, sig)
+// B->A: CIK=<gy, pkB, B, sigCIK>
+// A->B: Welcome=Enc(<hCIK, gx, initSecret, A, pkA>, sig)
 
 
-// Client logic
 rule PostInitKey:
   let
     gx = pk(~x)
     pkA = pk(ltkA)
     sig = sign(<gx, A, pkA>, ltkA)
+    cik = <gx, A, pkA, sig>
   in
   [
     !Ltk(A, ltkA),
     Fr(~x)
   ]
-  --[ PostedInitKey(A, gx) ]->
+  --[ ClientPostedInitKey(A, gx) ]->
   [
-    InitKeyPriv(A, ~x, ltkA),
-    InitKey(gx, A, pkA, sig),
-    Out(<gx, A, pkA, sig>)
+    InitKeyPriv(A, ~x, ltkA, sig),
+    Out(cik)
   ]
-
-rule ClientFinish:
-  let
-    gx = pk(x)
-    pkC = pk(ltkC)
-
-    // welcome = aenc(<welcomeInfo, welcomeSig>, gx)
-    welcomeData = adec(welcome, x)
-    welcomeInfo = fst(welcomeData)
-    welcomeSig = snd(welcomeData)
-
-    // welcomeInfo = <gy, h(CIK), k, S, pkS>
-    hCIK = fst(welcomeInfo)
-    gy = fst(snd(welcomeInfo))
-    epochSecret0 = fst(snd(snd(welcomeInfo)))
-    cTranscript0 = fst(snd(snd(snd(welcomeInfo))))
-    tree0 = fst(snd(snd(snd(snd(welcomeInfo)))))
-    S = fst(tree0)
-    pkS = snd(tree0)
-  in
-  [
-    ClientWait(C, x, ltkC, cik),
-    !Pk(S, pkS),
-    In(welcome)
-  ]
-  --[ Neq(gx, gy),
-      Eq(hCIK, h(cik)),
-      Eq(verify(welcomeSig, welcomeInfo, pkS), true),
-      ClientDone(C, S, gx, gy, epochSecret0) ]->
-  []
 
 // Server logic
 rule ServerInit:
@@ -82,10 +51,9 @@ rule ServerInit:
 
     gx = pk(~x)
     pkA = pk(ltkA)
-    tree0 = <A, pkA>
-    welcomeInfo = <hCIK, gx, ~epochSecret0, ~cTranscript0, tree0>
+    welcomeInfo = <hCIK, gx, ~cTranscript0, ~epochSecret0, A, pkA>
     welcomeSig = sign(welcomeInfo, ltkA)
-    welcome = aenc(<welcomeInfo, welcomeSig>, gx)
+    welcome = aenc(<welcomeInfo, welcomeSig>, gy)
   in
   [
     In(<gy, B, sig>),
@@ -95,38 +63,42 @@ rule ServerInit:
     Fr(~cTranscript0),
     Fr(~epochSecret0)
   ]
-  --[ Neq(A, B),
-      Eq(verify(sig, <gy, B, pkB>, pkB), true),
-      TwoUserA(A, B, gx, gy, ~epochSecret0) ]->
+  --[ Eq(verify(sig, <gy, B, pkB>, pkB), true),
+      TwoUserA(A, B, gy, gx, ~cTranscript0, ~epochSecret0) ]->
   [
-    JoinedTwoUserA(A, B, ~cTranscript0, ~epochSecret0),
     Out(welcome)
   ]
-/*
-rule ServerInit:
-  let
-    cik = <gx, C, pkC, sig>
-    hCIK = h(cik)
 
-    gy = pk(~y)
-    pkS = pk(ltkS)
-    welcomeInfo = <hCIK, gy, ~k, S, pkS>
-    welcomeSig = sign(welcomeInfo, ltkS)
-    welcome = aenc(<welcomeInfo, welcomeSig>, gx)
+rule AddFirstUser:
+  let
+    gy = pk(y)
+    pkB = pk(ltkB)
+    cik = <gy, B, pkB, sig>
+
+    // welcome = aenc(<welcomeInfo, welcomeSig>, gy)
+    welcomeData = adec(welcome, y)
+    welcomeInfo = fst(welcomeData)
+    welcomeSig = snd(welcomeData)
+
+    // welcomeInfo = <gx, h(BIK), k, A, pkA>
+    hBIK = fst(welcomeInfo)
+    gx = fst(snd(welcomeInfo))
+    cTranscript0 = fst(snd(snd(welcomeInfo)))
+    epochSecret0 = fst(snd(snd(snd(welcomeInfo))))
+    A = fst(snd(snd(snd(snd(welcomeInfo)))))
+    pkA = snd(snd(snd(snd(snd(welcomeInfo)))))
+
   in
   [
-    In(<gx, C, sig>),
-    !Pk(C, pkC),
-    !Ltk(S, ltkS),
-    Fr(~y),
-    Fr(~k)
+    InitKeyPriv(B, y, ltkB, sig),
+    !Pk(A, pkA),
+    In(welcome)
   ]
-  --[ Eq(verify(sig, <gx, C, pkC>, pkC), true),
-      TwoUserA(S, C, gx, gy, ~k) ]->
-  [
-    Out(welcome)
-  ]
-  */
+  --[ Neq(gy, gx),
+      Eq(hBIK, h(cik)),
+      Eq(verify(welcomeSig, welcomeInfo, pkA), true),
+      TwoUserB(B, A, gy, gx, cTranscript0, epochSecret0) ]->
+  []
 
 // Restrictions
 restriction Equality:
@@ -139,17 +111,17 @@ restriction Inequality:
 lemma HonestServerTrace:
   exists-trace
   "
-    Ex C S gx gy k #j.
-        TwoUserA(S, C, gx, gy, k) @ #j
+    Ex C S gy gx ct k #j.
+        TwoUserA(S, C, gy, gx, ct, k) @ #j
       & not(Ex A #k. LtkReveal(A) @ #k)
   "
 
 lemma HonestTrace:
   exists-trace
   "
-    Ex C S gx gy k #i #j.
-        ClientDone(C, S, gx, gy, k) @ #i
-      & TwoUserA(S, C, gx, gy, k) @ #j
+    Ex C S gy gx ct k #i #j.
+        TwoUserB(C, S, gy, gx, ct, k) @ #i
+      & TwoUserA(S, C, gy, gx, ct, k) @ #j
       & not(Ex A #k. LtkReveal(A) @ #k)
   "
 
@@ -159,9 +131,9 @@ lemma HonestTrace:
 // ... unless one of the long-term keys was compromised
 lemma KeySecrecy:
   "
-  not(Ex C S gx gy k #i #j #k.
-        ClientDone(C, S, gx, gy, k) @ #i
-      & TwoUserA(S, C, gx, gy, k) @ #j
+  not(Ex C S gy gx ct k #i #j #k.
+        TwoUserB(C, S, gy, gx, ct, k) @ #i
+      & TwoUserA(S, C, gy, gx, ct, k) @ #j
       & K(k) @ #k
       & not(Ex #rc. LtkReveal(C) @ #rc)
       & not(Ex #rs. LtkReveal(S) @ #rs)
@@ -172,9 +144,9 @@ lemma KeySecrecy:
 // ... then it's based on a response from a server
 lemma ServerLiveness:
   "
-  All C S gx gy k #i.
-    ClientDone(C, S, gx, gy, k) @ #i
-    ==> ( (Ex #j. (TwoUserA(S, C, gx, gy, k) @ #j) & (#j < #i))
+  All C S gy gx ct k #i.
+    TwoUserB(C, S, gy, gx, ct, k) @ #i
+    ==> ( (Ex #j. (TwoUserA(S, C, gy, gx, ct, k) @ #j) & (#j < #i))
         | (Ex #rc. LtkReveal(C) @ #rc)
         | (Ex #rs. LtkReveal(S) @ #rs)
         )
@@ -184,9 +156,9 @@ lemma ServerLiveness:
 // ... then it's based on a client's init key
 lemma ClientLiveness:
   "
-  All C S gx gy k #i.
-    TwoUserA(S, C, gx, gy, k) @ #i
-    ==> ( (Ex #j. (PostedInitKey(C, gx) @ #j) & (#j < #i))
+  All C S gy gx ct k #i.
+    TwoUserA(S, C, gy, gx, ct, k) @ #i
+    ==> ( (Ex #j. (ClientPostedInitKey(C, gy) @ #j) & (#j < #i))
         | (Ex #rc. LtkReveal(C) @ #rc)
         | (Ex #rs. LtkReveal(S) @ #rs)
         )
@@ -195,10 +167,10 @@ lemma ClientLiveness:
 // ... injective agreement
 lemma InjectiveAgreement:
   "
-  All C S gx gy k #i.
-    TwoUserA(S, C, gx, gy, k) @ #i
-    ==> ( not(Ex C2 S2 gx2 gy2 #i2.
-              TwoUserA(S2, C2, gx2, gy2, k) @ #i2
+  All C S gy gx ct k #i.
+    TwoUserA(S, C, gy, gx, ct, k) @ #i
+    ==> ( not(Ex C2 S2 gx2 gy2 ct2 #i2.
+              TwoUserA(S2, C2, gx2, gy2, ct2, k) @ #i2
              & not(#i2 = #i)
              )
         | (Ex #rc. LtkReveal(C) @ #rc)
