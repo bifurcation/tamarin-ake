@@ -1,0 +1,180 @@
+theory MLS08
+begin
+
+builtins: hashing, signing, asymmetric-encryption
+
+// MAC
+functions: mac/2
+
+// PKI Provisioning
+rule RegisterPK:
+  [ Fr(~ltk) ]
+  -->
+  [
+    !Ltk($A, ~ltk),
+    !Pk($A, pk(~ltk)),
+    Out(pk(~ltk))
+  ]
+
+rule RevealLTK:
+  [ !Ltk(A, ltk) ]
+  --[ LtkReveal(A) ]->
+  [ Out(ltk) ]
+
+
+// B->A: CIK=<gy, pkB, B, sigCIK>
+// A->B: Welcome=Enc(<hCIK, gx, initSecret, A, pkA>, sig)
+
+rule PostInitKey:
+  let
+    gx = pk(~x)
+    pkA = pk(ltkA)
+    sig = sign(<gx, A, pkA>, ltkA)
+    cik = <gx, A, pkA, sig>
+  in
+  [
+    !Ltk(A, ltkA),
+    Fr(~x)
+  ]
+  --[ ClientPostedInitKey(A, gx) ]->
+  [
+    InitKeyPriv(A, ~x, ltkA, sig),
+    Out(cik)
+  ]
+
+// First user joins
+rule AddFirstUser:
+  let
+    cik = <gy, B, pkB, sig>
+    hCIK = h(cik)
+
+    gx = pk(~x)
+    pkA = pk(ltkA)
+    welcomeInfo = <hCIK, gx, ~cTranscript0, ~epochSecret0, A, pkA>
+    welcomeSig = sign(welcomeInfo, ltkA)
+    welcome = aenc(<welcomeInfo, welcomeSig>, gy)
+  in
+  [
+    In(<gy, B, sig>),
+    !Pk(B, pkB),
+    !Ltk(A, ltkA),
+    Fr(~x),
+    Fr(~cTranscript0),
+    Fr(~epochSecret0)
+  ]
+  --[ Eq(verify(sig, <gy, B, pkB>, pkB), true),
+      TwoUserA(A, B, gy, gx, ~cTranscript0, ~epochSecret0) ]->
+  [
+    Out(welcome)
+  ]
+
+rule ReceiveFirstWelcome:
+  let
+    gy = pk(y)
+    pkB = pk(ltkB)
+    cik = <gy, B, pkB, sig>
+
+    // welcome = aenc(<welcomeInfo, welcomeSig>, gy)
+    welcomeData = adec(welcome, y)
+    welcomeInfo = fst(welcomeData)
+    welcomeSig = snd(welcomeData)
+
+    // welcomeInfo = <gx, h(BIK), k, A, pkA>
+    hBIK = fst(welcomeInfo)
+    gx = fst(snd(welcomeInfo))
+    cTranscript0 = fst(snd(snd(welcomeInfo)))
+    epochSecret0 = fst(snd(snd(snd(welcomeInfo))))
+    A = fst(snd(snd(snd(snd(welcomeInfo)))))
+    pkA = snd(snd(snd(snd(snd(welcomeInfo)))))
+
+  in
+  [
+    InitKeyPriv(B, y, ltkB, sig),
+    !Pk(A, pkA),
+    In(welcome)
+  ]
+  --[ Neq(gy, gx),
+      Eq(hBIK, h(cik)),
+      Eq(verify(welcomeSig, welcomeInfo, pkA), true),
+      TwoUserB(B, A, gy, gx, cTranscript0, epochSecret0) ]->
+  []
+
+// Restrictions
+restriction Equality:
+  "All x y #i. Eq(x,y) @i ==> x = y"
+
+restriction Inequality:
+  "All x y #i. Neq(x,y) @i ==> not(x = y)"
+
+// Functionality test
+lemma HonestServerTrace:
+  exists-trace
+  "
+    Ex C S gy gx ct k #j.
+        TwoUserA(S, C, gy, gx, ct, k) @ #j
+      & not(Ex A #k. LtkReveal(A) @ #k)
+  "
+
+lemma HonestTrace:
+  exists-trace
+  "
+    Ex C S gy gx ct k #i #j.
+        TwoUserB(C, S, gy, gx, ct, k) @ #i
+      & TwoUserA(S, C, gy, gx, ct, k) @ #j
+      & not(Ex A #k. LtkReveal(A) @ #k)
+  "
+
+// If a client has established a session key,
+// ... then the server has the same key,
+// ... and it is not known to the attacker
+// ... unless one of the long-term keys was compromised
+lemma KeySecrecy:
+  "
+  not(Ex C S gy gx ct k #i #j #k.
+        TwoUserB(C, S, gy, gx, ct, k) @ #i
+      & TwoUserA(S, C, gy, gx, ct, k) @ #j
+      & K(k) @ #k
+      & not(Ex #rc. LtkReveal(C) @ #rc)
+      & not(Ex #rs. LtkReveal(S) @ #rs)
+  )
+  "
+
+// If a client has established a session key
+// ... then it's based on a response from a server
+lemma ServerLiveness:
+  "
+  All C S gy gx ct k #i.
+    TwoUserB(C, S, gy, gx, ct, k) @ #i
+    ==> ( (Ex #j. (TwoUserA(S, C, gy, gx, ct, k) @ #j) & (#j < #i))
+        | (Ex #rc. LtkReveal(C) @ #rc)
+        | (Ex #rs. LtkReveal(S) @ #rs)
+        )
+  "
+
+// If a server has established a session key
+// ... then it's based on a client's init key
+lemma ClientLiveness:
+  "
+  All C S gy gx ct k #i.
+    TwoUserA(S, C, gy, gx, ct, k) @ #i
+    ==> ( (Ex #j. (ClientPostedInitKey(C, gy) @ #j) & (#j < #i))
+        | (Ex #rc. LtkReveal(C) @ #rc)
+        | (Ex #rs. LtkReveal(S) @ #rs)
+        )
+  "
+
+// ... injective agreement
+lemma InjectiveAgreement:
+  "
+  All C S gy gx ct k #i.
+    TwoUserA(S, C, gy, gx, ct, k) @ #i
+    ==> ( not(Ex C2 S2 gx2 gy2 ct2 #i2.
+              TwoUserA(S2, C2, gx2, gy2, ct2, k) @ #i2
+             & not(#i2 = #i)
+             )
+        | (Ex #rc. LtkReveal(C) @ #rc)
+        | (Ex #rs. LtkReveal(S) @ #rs)
+        )
+  "
+
+end

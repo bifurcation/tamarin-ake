@@ -1,0 +1,480 @@
+theory MLS08_3way
+begin
+
+builtins: signing, hashing, asymmetric-encryption
+
+// MAC
+functions: mac/2
+
+// PKI Provisioning
+rule RegisterPK:
+  [ Fr(~ltk) ]
+  -->
+  [
+    !Ltk($A, ~ltk),
+    !Pk($A, pk(~ltk)),
+    Out(pk(~ltk))
+  ]
+
+rule RevealLTK:
+  [ !Ltk(A, ltk) ]
+  --[ LtkReveal(A) ]->
+  [ Out(ltk) ]
+
+
+// cTranscript0 = Fr()
+// initSecret0 = Fr()
+//
+// B->A: CIK_B=<gy, pkB, B, Sig(B; ...)>
+// A->B: Welcome=Enc(<hCIK_B, gx, cTranscript0, initSecret0, A, pkA>, sig)
+//
+// groupContext0 = h(<cTranscript0, A, B, gx, gy, pkA, pkB>)
+// epochSecret0 = h(initSecret0)
+// initSecret1 = h(<'epoch', epochSecret0, groupContext0>)
+//
+// C->A: CIK_C=<gz, pkC, C, Sig(C; ...)>
+//
+// addData = <'add', cik>
+// cTranscript1 = h(<cTranscript0, addData>)
+// groupContext1 = h(<cTranscript1, A, B, C, gx, gy, gz, pkA, pkB, pkC>)
+//
+// epochSecret1 = h(initSecret1)
+// confirmKey1 = h(<'confirm', epochSecret1, groupContext1>)
+// initSecret2 = h(<'init', epochSecret1, groupContext1>)
+//
+// A->B: Add=<"add", CIK, mac(confirmKey1, groupContext1), sig>
+// A->C: Welcome=Enc(<hCIK_C, gx, gy, cTranscript1, initSecret1, A, pkA, B, pkB>, sig)
+
+/*
+
+struct {
+    ProtocolVersion version;
+    opaque group_id<0..255>;
+    uint32 epoch;
+    optional<RatchetNode> tree<1..2^32-1>;
+    opaque interim_transcript_hash<0..255>;
+    opaque init_secret<0..255>;
+} WelcomeInfo;
+
+               init_secret_[n-1] (or 0)
+                     |
+                     V
+update_secret -> HKDF-Extract = epoch_secret
+                     |
+                     +--> Derive-Secret(., "sender data")
+                     |    = sender_data_secret
+                     |
+                     +--> Derive-Secret(., "handshake")
+                     |    = handshake_secret
+                     |
+                     +--> Derive-Secret(., "app")
+                     |    = application_secret
+                     |
+                     +--> Derive-Secret(., "confirm")
+                     |    = confirmation_key
+                     |
+                     V
+               Derive-Secret(., "init")
+                     |
+                     V
+               init_secret_[n]
+
+*/
+
+rule PostInitKey:
+  let
+    gx = pk(~x)
+    pkA = pk(ltkA)
+    sig = sign(<gx, A, pkA>, ltkA)
+    cik = <gx, A, pkA, sig>
+  in
+  [
+    !Ltk(A, ltkA),
+    Fr(~x)
+  ]
+  --[ ClientPostedInitKey(A, gx) ]->
+  [
+    InitKeyPriv(A, ~x, ltkA, sig),
+    Out(cik)
+  ]
+
+// First user joins
+rule AddFirstUser:
+  let
+    cik = <gy, B, pkB, sig>
+    hCIK = h(cik)
+
+    cTranscript0 = '0'
+    iTranscript0 = '0'
+
+    gx = pk(~x)
+    pkA = pk(ltkA)
+    welcomeInfo = <hCIK, gx, cTranscript0, iTranscript0, ~initSecret0, A, pkA>
+    welcomeSig = sign(welcomeInfo, ltkA)
+    welcome = aenc(<welcomeInfo, welcomeSig>, gy)
+
+    groupContext0 = h(<cTranscript0, A, B, gx, gy, pkA, pkB>)
+    epochSecret0 = h(~initSecret0)
+    initSecret1 = h(<'init', epochSecret0, groupContext0>)
+  in
+  [
+    In(<gy, B, sig>),
+    !Pk(B, pkB),
+    !Ltk(A, ltkA),
+    Fr(~x),
+    Fr(~initSecret0)
+  ]
+  --[ Eq(verify(sig, <gy, B, pkB>, pkB), true),
+      Transcript(iTranscript0),
+      TwoUserA(A, B, initSecret1) ]->
+  [
+    Out(welcome),
+    JoinedTwoUserA(A, B, ~x, gy, ltkA, pkB, '0', initSecret1)
+  ]
+
+rule ReceiveFirstUserWelcome:
+  let
+    gy = pk(y)
+    pkB = pk(ltkB)
+    cik = <gy, B, pkB, sig>
+
+    // welcome = aenc(<welcomeInfo, welcomeSig>, gy)
+    welcomeData = adec(welcome, y)
+    welcomeInfo = fst(welcomeData)
+    welcomeSig = snd(welcomeData)
+
+    // welcomeInfo = <hCIK, gx, cTranscript0, iTranscript0, initSecret0, A, pkA>
+    hCIK         = fst(welcomeInfo)
+    gx           = fst(snd(welcomeInfo))
+    cTranscript0 = fst(snd(snd(welcomeInfo)))
+    iTranscript0 = fst(snd(snd(snd(welcomeInfo))))
+    initSecret0  = fst(snd(snd(snd(snd(welcomeInfo)))))
+    A            = fst(snd(snd(snd(snd(snd(welcomeInfo))))))
+    pkA          = snd(snd(snd(snd(snd(snd(welcomeInfo))))))
+
+    groupContext0 = h(<cTranscript0, A, B, gx, gy, pkA, pkB>)
+    epochSecret0 = h(initSecret0)
+    initSecret1 = h(<'init', epochSecret0, groupContext0>)
+
+  in
+  [
+    InitKeyPriv(B, y, ltkB, sig),
+    !Pk(A, pkA),
+    In(welcome)
+  ]
+  --[ Neq(gy, gx),
+      Eq(hCIK, h(cik)),
+      Eq(verify(welcomeSig, welcomeInfo, pkA), true),
+      Transcript(iTranscript0),
+      TwoUserB(A, B, initSecret1) ]->
+  [
+    JoinedTwoUserB(A, B, gx, y, pkA, ltkB, iTranscript0, initSecret1)
+  ]
+
+// Second user joins
+rule AddSecondUser:
+  let
+    cik = <gz, C, pkC, sig>
+    hCIK = h(cik)
+
+    gx = pk(x)
+    pkA = pk(ltkA)
+
+    addData = <'add', cik>
+
+    cTranscript1 = h(<iTranscript0, addData>)
+    groupContext1 = h(<cTranscript1, A, B, C, gx, gy, gz, pkA, pkB, pkC>)
+
+    epochSecret1 = h(initSecret1)
+    initSecret2 = h(<'init', epochSecret1, groupContext1>)
+    confirmKey1 = h(<'confirm', epochSecret1, groupContext1>)
+    addConfirm = mac(confirmKey1, groupContext1)
+
+    addSig = sign(<addData, addConfirm>, ltkA)
+    add = <addData, addConfirm, addSig>
+    iTranscript1 = h(<cTranscript1, addConfirm, addSig>)
+
+    welcomeInfo = <hCIK, gx, gy, cTranscript1, iTranscript1, initSecret1, A, pkA, B, pkB>
+    welcomeSig = sign(welcomeInfo, ltkA)
+    welcome = aenc(<welcomeInfo, welcomeSig>, gz)
+  in
+  [
+    In(<gz, C, pkC, sig>),
+    !Pk(C, pkC),
+    JoinedTwoUserA(A, B, x, gy, ltkA, pkB, iTranscript0, initSecret1)
+  ]
+  --[ Eq(verify(sig, <gz, C, pkC>, pkC), true),
+      ThreeUser(),
+      Transcript(iTranscript1),
+      ThreeUserA(A, B, C, initSecret2) ]->
+  [
+    Out(welcome),
+    Out(add)
+  ]
+
+rule ReceiveSecondUserAdd:
+  let
+    gy = pk(y)
+    pkB = pk(ltkB)
+
+    // add = <addData, addConfirm, addSig>
+    addData    = fst(add)
+    addConfirm = fst(snd(add))
+    addSig     = snd(snd(add))
+
+    // addData = <'add', gz, C, pkC, sig>
+    addTag = fst(addData)
+    gz     = fst(snd(addData))
+    C      = fst(snd(snd(addData)))
+    pkC    = fst(snd(snd(snd(addData))))
+    cikSig = snd(snd(snd(snd(addData))))
+
+    cTranscript1 = h(<iTranscript0, addData>)
+    iTranscript1 = h(<cTranscript1, addConfirm, addSig>)
+    groupContext1 = h(<cTranscript1, A, B, C, gx, gy, gz, pkA, pkB, pkC>)
+
+    epochSecret1 = h(initSecret1)
+    initSecret2 = h(<'init', epochSecret1, groupContext1>)
+    confirmKey1 = h(<'confirm', epochSecret1, groupContext1>)
+
+  in
+  [
+    In(add),
+    !Pk(C, pkC),
+    JoinedTwoUserB(A, B, gx, y, pkA, ltkB, iTranscript0, initSecret1)
+  ]
+  --[ Neq(gz, gx),
+      Neq(gz, gy),
+      Eq(mac(confirmKey1, groupContext1), addConfirm),
+      Eq(verify(addSig, <addData, addConfirm>, pkA), true),
+      Eq(verify(cikSig, <gz, C, pkC>, pkC), true),
+      ThreeUser(),
+      Transcript(iTranscript1),
+      ThreeUserB(A, B, C, initSecret2) ]->
+  []
+
+rule ReceiveSecondUserWelcome:
+  let
+    gz = pk(z)
+    pkC = pk(ltkC)
+    cik = <gz, C, pkC, sig>
+
+    // welcome = aenc(<welcomeInfo, welcomeSig>, gy)
+    welcomeData = adec(welcome, z)
+    welcomeInfo = fst(welcomeData)
+    welcomeSig = snd(welcomeData)
+
+    // welcomeInfo = <hCIK, gx, gy, cTranscript1, epochSecret1, A, pkA, B, pkB>
+    hCIK =         fst(welcomeInfo)
+    gx =           fst(snd(welcomeInfo))
+    gy =           fst(snd(snd(welcomeInfo)))
+    cTranscript1 = fst(snd(snd(snd(welcomeInfo))))
+    iTranscript1 = fst(snd(snd(snd(snd(welcomeInfo)))))
+    initSecret1  = fst(snd(snd(snd(snd(snd(welcomeInfo))))))
+    A =            fst(snd(snd(snd(snd(snd(snd(welcomeInfo)))))))
+    pkA =          fst(snd(snd(snd(snd(snd(snd(snd(welcomeInfo))))))))
+    B =            fst(snd(snd(snd(snd(snd(snd(snd(snd(welcomeInfo)))))))))
+    pkB =          snd(snd(snd(snd(snd(snd(snd(snd(snd(welcomeInfo)))))))))
+
+    groupContext1 = h(<cTranscript1, A, B, C, gx, gy, gz, pkA, pkB, pkC>)
+    epochSecret1 = h(initSecret1)
+    initSecret2 = h(<'init', epochSecret1, groupContext1>)
+
+  in
+  [
+    InitKeyPriv(C, z, ltkC, sig),
+    !Pk(A, pkA),
+    !Pk(B, pkB),
+    In(welcome)
+  ]
+  --[ Neq(gz, gx),
+      Neq(gz, gy),
+      Eq(hCIK, h(cik)),
+      Eq(verify(welcomeSig, welcomeInfo, pkA), true),
+      ThreeUser(),
+      Transcript(iTranscript1),
+      ThreeUserC(A, B, C, initSecret2) ]->
+  []
+
+// Restrictions
+restriction Equality:
+  "All x y #i. Eq(x,y) @i ==> x = y"
+
+restriction Inequality:
+  "All x y #i. Neq(x,y) @i ==> not(x = y)"
+
+// Functionality tests
+lemma TwoPartyExecutable:
+  exists-trace
+  "
+    Ex A B key #i #j.
+        TwoUserA(A, B, key) @ #i
+      & TwoUserB(A, B, key) @ #j
+      & not(Ex X #k. LtkReveal(X) @ #k)
+  "
+
+lemma ThreePartyExecutable:
+  exists-trace
+  "
+    Ex A B C key #i #j #k.
+        ThreeUserA(A, B, C, key) @ #i
+      & ThreeUserB(A, B, C, key) @ #j
+      & ThreeUserC(A, B, C, key) @ #k
+      & not(Ex X #r. LtkReveal(X) @ #r)
+  "
+
+// If three clients have established a session key,
+// ... then they agree on the interim transcript
+lemma TranscriptAgreement2:
+  "
+  All A B key #i #j.
+    ( TwoUserA(A, B, key) @ #i
+    & TwoUserB(A, B, key) @ #j
+    )
+    ==>
+    Ex tr.
+    ( Transcript(tr) @ #i
+    & Transcript(tr) @ #j
+    )
+  "
+
+// If three clients have established a session key,
+// ... then they agree on the interim transcript
+lemma TranscriptAgreement3:
+  "
+  All A B C key #i #j #k.
+    ( ThreeUserA(A, B, C, key) @ #i
+    & ThreeUserB(A, B, C, key) @ #j
+    & ThreeUserC(A, B, C, key) @ #k
+    )
+    ==>
+    Ex tr.
+    ( Transcript(tr) @ #i
+    & Transcript(tr) @ #j
+    & Transcript(tr) @ #k
+    )
+  "
+
+// If a client has established a session key,
+// ... then the server has the same key,
+// ... and it is not known to the attacker
+// ... unless one of the long-term keys was compromised
+// ... or we've added a third user to the group (who might be compromised)
+lemma KeySecrecy2:
+  "
+  not(Ex A B k #i #j #k.
+        TwoUserA(A, B, k) @ #i
+      & TwoUserB(A, B, k) @ #j
+      & K(k) @ #k
+      & not(Ex #ra. LtkReveal(A) @ #ra)
+      & not(Ex #rb. LtkReveal(B) @ #rb)
+      & not(Ex #l. ThreeUser() @ #l)
+  )
+  "
+
+// If a client has established a session key
+// ... then it's based on a Welcome from another client
+lemma AdderLiveness2:
+  "
+  All A B k #i.
+    TwoUserB(A, B, k) @ #i
+    ==> ( (Ex #j. (TwoUserA(A, B, k) @ #j) & (#j < #i))
+        | (Ex #ra. LtkReveal(A) @ #ra)
+        | (Ex #rb. LtkReveal(B) @ #rb)
+        )
+  "
+
+// If a client has established a session key
+// ... then it's based on a client's init key
+lemma JoinerLiveness2:
+  "
+  All A B k #i.
+    TwoUserA(A, B, k) @ #i
+    ==> ( (Ex gy #j. (ClientPostedInitKey(B, gy) @ #j) & (#j < #i))
+        | (Ex #ra. LtkReveal(A) @ #ra)
+        | (Ex #rb. LtkReveal(B) @ #rb)
+        )
+  "
+
+// ... injective agreement
+lemma InjectiveAgreement2:
+  "
+  All A B k #i.
+    TwoUserA(A, B, k) @ #i
+    ==> ( not(Ex A2 B2 #i2.
+              TwoUserA(A2, B2, k) @ #i2
+             & not(#i2 = #i)
+             )
+        | (Ex #ra. LtkReveal(A) @ #ra)
+        | (Ex #rb. LtkReveal(B) @ #rb)
+        )
+  "
+
+
+// If three clients have established a key,
+// ... it is not known to the attacker
+// ... unless one of the long-term keys was compromised
+lemma KeySecrecy3:
+  "
+  not(Ex A B C key #i #j #k #l.
+        ThreeUserA(A, B, C, key) @ #i
+      & ThreeUserB(A, B, C, key) @ #j
+      & ThreeUserC(A, B, C, key) @ #k
+      & K(key) @ #l
+      & not(Ex #ra. LtkReveal(A) @ #ra)
+      & not(Ex #rb. LtkReveal(B) @ #rb)
+      & not(Ex #rc. LtkReveal(C) @ #rc)
+  )
+  "
+
+// If an existing user and a new joiner both think that someone
+// added them, it's because someone did.  Unless that person's key
+// has been compromised.
+lemma AdderLiveness3:
+  "
+  All A B C key #i #j.
+    ( ThreeUserB(A, B, C, key) @ #i
+    & ThreeUserC(A, B, C, key) @ #j
+    )
+    ==> ( (Ex #k. ThreeUserA(A, B, C, key) @ #k)
+        | (Ex #l. LtkReveal(A) @ #l)
+        )
+  "
+
+// If an existing user and a new joiner both see an add and arrive
+// at the same key, then they agree on the roster.
+//
+// Note that there's no exception here for compromise of the adding
+// member's key, so this holds even if the adding user is malicious.
+//
+// Note that this implies injective agreement.
+lemma RosterConsistency3:
+  "
+  All A B1 B2 C1 C2 key #i #j.
+    ( ThreeUserB(A, B1, C1, key) @ #i
+    & ThreeUserC(A, B2, C2, key) @ #j
+    )
+    ==> ( (B1 = B2)
+        & (C1 = C2)
+        )
+  "
+
+// ... injective agreement
+lemma InjectiveAgreement3:
+  "
+  All A1 A2 B1 B2 C1 C2 key #i1 #j1 #i2 #j2.
+    ( ThreeUserB(A1, B1, C1, key) @ #i1
+    & ThreeUserC(A1, B1, C1, key) @ #j1
+    & ThreeUserB(A2, B2, C2, key) @ #i2
+    & ThreeUserC(A2, B2, C2, key) @ #j2
+    )
+    ==> ( ( (A1 = A1)
+          & (B1 = B2)
+          & (C1 = C2)
+          )
+        | (Ex #r1. LtkReveal(A1) @ #r1)
+        | (Ex #r2. LtkReveal(A2) @ #r2)
+        )
+  "
+
+end
